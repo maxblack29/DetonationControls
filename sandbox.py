@@ -4,11 +4,22 @@ import numpy as np
 import time
 
 
-device_name = "cDAQ9188-169338EMod3/port0/line0:7" 
+#port = 'port0'
 
-port = 'port0'
-state = [False, False, False, False, False, False, False, False]
+def set_all_digital_outputs(states):
+    # states: list or array of 8 booleans
+    device_name = "cDAQ9188-169338EMod3/port0/line0:7"
+    with nidaqmx.Task() as task:
+        task.do_channels.add_do_chan(device_name, line_grouping=LineGrouping.CHAN_PER_LINE)
+        task.write(states)
 
+def set_digital_output(states):
+    device_name = "cDAQ9188-169338EMod3/port0/line0:7"
+    with nidaqmx.Task() as task:
+        task.do_channels.add_do_chan(device_name, line_grouping=LineGrouping.CHAN_PER_LINE)
+        task.write(states)
+
+        '''
 k = 0
 while k < 5:
     state = np.logical_not(state)
@@ -18,5 +29,4 @@ while k < 5:
         task.write(state)
     time.sleep(1)
 
-#First state is [False, False, False, False, False, False, False, False]
-#Second state must move to [False, True, True, False, True, True, F]
+    '''

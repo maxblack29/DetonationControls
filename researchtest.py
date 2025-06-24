@@ -1,30 +1,82 @@
 import tkinter as tk
 from tkinter import ttk
 import random
-import nidaqOutputTest
+import sandbox
+import pdb
+import alicatcontrol
+import asyncio
+from alicat import FlowController
 
 # Prints default states of the gasses while also creating a dictionary containing actual default settings. 
 def get_gui_settings():
     defaults = """
     Default Mass Flow Parameters:
 
-    "A": {"gas": "C2H2", "setpoint": 0.0, "unit": "SLPM"},
-    "B": {"gas": "H2", "setpoint": 0.0, "unit": "SLPM"},
-    "C": {"gas": "O2", "setpoint": 0.0, "unit": "SLPM"},
-    "D": {"gas": "N2", "setpoint": 0.0, "unit": "SLPM"},
+    "A": {"gas": "H2", "setpoint": 0.0, "unit": "SLPM"},
+    "B": {"gas": "N2", "setpoint": 0.0, "unit": "SLPM"},
+    "C": {"gas": "O2", "setpoint": 0.0, "unit": "SLPM"}
     """
     print(defaults)
     return {
-        "A": {"gas": "C2H2", "setpoint": 0.0, "unit": "SLPM"},
-        "B": {"gas": "H2", "setpoint": 0.0, "unit": "SLPM"},
-        "C": {"gas": "O2", "setpoint": 0.0, "unit": "SLPM"},
-        "D": {"gas": "N2", "setpoint": 0.0, "unit": "SLPM"},
+        "A": {"gas": "H2", "setpoint": 0.0, "unit": "SLPM"},
+        "B": {"gas": "N2", "setpoint": 0.0, "unit": "SLPM"},
+        "C": {"gas": "O2", "setpoint": 0.0, "unit": "SLPM"}
     }
+class MFCsetup(tk.Toplevel): #This class creates a setup window for the mass flow rate controllers so that the user can choose how many they are using. 
+    def __init__(self, parent, max_mfcs = 9):
+        super().__init__(parent) # Initializes the MFC setup window
+        self.title("MFC Setup")
+        self.value = None 
+        
+        mfcquestion = tk.Label(self, text = "How many mass flow controllers are you using?")
+        mfcquestion.pack()
+        self.var = tk.IntVar(value = 3) # Default to 3 MFCs
+        answer = tk.Spinbox(self, from_=1, to=max_mfcs, textvariable = self.var, width = 5)
+        answer.pack() 
+
+        button1 = tk.Button(self, text = "Ok", command = self.on_ok)
+        button1.pack()
+        self.grab_set() 
+        self.wait_window()
+
+    def on_ok(self):
+        self.value = self.var.get()
+        self.destroy()
+
+class ChooseGas(tk.Toplevel):
+    def __init__(self, parent, num_mfcs, gas_options):
+        super().__init__(parent)
+        self.title("Choose Gasses")
+        self.selected_gasses = []
+        self.vars = []
+        gasquestion = tk.Label(self, text="Which gasses are currently in use? Please match your gas choice to the correct MFC.")
+        gasquestion.pack(pady=5)
+        gaswarning = tk.Label(self, text="*Please know the letter of each flow controller and the gas connected to it BEFORE selecting the gasses here. They must match up.*")
+        gaswarning.pack(pady=5)
+        frame = tk.Frame(self)
+        frame.pack(padx=10, pady=10)
+        for i in range(num_mfcs):
+            label = chr(ord('A') + i)
+            tk.Label(frame, text=f"MFC {label}:").grid(row=i, column=0, sticky="e", padx=5, pady=2)
+            var = tk.StringVar(value=gas_options[0])
+            self.vars.append(var)
+            cb = ttk.Combobox(frame, textvariable=var, values=gas_options, state="readonly", width=15)
+            cb.grid(row=i, column=1, padx=5, pady=2)
+        btn = tk.Button(self, text="OK", command=self.on_ok)
+        btn.pack(pady=10)
+        self.grab_set()
+        self.wait_window()
+
+    def on_ok(self):
+        self.selected_gasses = [var.get() for var in self.vars]
+        self.destroy()
 
 # This is a simple GUI for a combustion chamber system with solenoids, pressure sensors, and gas inputs.
 class CombustionChamberGUI:
-    def __init__(self, root):
+    def __init__(self, root, num_mfcs, selected_gasses):
         self.root = root
+        self.num_mfcs = num_mfcs
+        self.selected_gasses = selected_gasses
         self.root.title("Combustion Chamber System")
         self.main_frame = tk.Frame(self.root)
         self.main_frame.pack(fill="both", expand=True)
@@ -36,6 +88,7 @@ class CombustionChamberGUI:
         self.create_pressure_sensors()
         self.create_photo_detectors()
         self.create_solenoids()
+        #pdb.set_trace()
         self.positions = [
             (28, 590), (105, 502), (103, 590),
             (152, 150), (235, 590), (935, 150),
@@ -61,7 +114,9 @@ class CombustionChamberGUI:
         #self.update_button = ttk.Button(self.controls_frame, text="Manually Update Readouts", command=self.update_readouts)
         #self.update_button.pack(pady=10)
         self.create_gas_inputs()
+        self.ni_states = [False] * 8  
         self.update_values_loop()
+     
 
         # Initialize the NI-9474 digital output module, sets up main window and frames for GUI
 
@@ -76,6 +131,9 @@ class CombustionChamberGUI:
         self.draw_arrow(solenoid['x0'], solenoid['y0'], solenoid['size'], solenoid['orient'], arrow_state, index, solenoid['arrow_orient'])
         print(f"Solenoid {index} switch_state: {solenoid['switch_state']}")
         self.get_solenoid_states()
+
+        self.ni_states[index] = solenoid['switch_state']
+        sandbox.set_all_digital_outputs(self.ni_states)
 
 
     def draw_sections(self):
@@ -130,6 +188,8 @@ class CombustionChamberGUI:
         self.canvas.create_window(x + 30, y, window=readout)
     #Creates a label and readout for each sensor, adding them to the specified sensor list for later use
 
+    
+    #BEFORE TESTING, COME BACK AND CHANGE THE NI_CHANNEL TO THE CORRECT ONE FOR THE SOLENOID, YOU DON'T KNOW WHICH ONE IT IS YET
     def create_solenoids(self):
         self.solenoids = [
             {'x0': 45, 'y0': 570, 'size': 30, 'orient': 'r', 'arrow_default': True, 'arrow_orient': 'n'},
@@ -137,10 +197,10 @@ class CombustionChamberGUI:
             {'x0': 120, 'y0': 570, 'size': 30, 'orient': 'r', 'arrow_default': True, 'arrow_orient': 'n'},
             {'x0': 220, 'y0': 160, 'size': 30, 'orient': 'u', 'arrow_default': True, 'arrow_orient': 'r'},
             {'x0': 300, 'y0': 600, 'size': 30, 'orient': 'r', 'arrow_default': True, 'arrow_orient': 'n'},
-            {'x0': 1000, 'y0': 160, 'size': 30, 'orient': 'u', 'arrow_default': False, 'arrow_orient': 'r'},
+            #{'x0': 1000, 'y0': 160, 'size': 30, 'orient': 'u', 'arrow_default': False, 'arrow_orient': 'r', 'ni_channel':5},
             {'x0': 840, 'y0': 600, 'size': 30, 'orient': 'r', 'arrow_default': True, 'arrow_orient': 'r'},
             {'x0': 840, 'y0': 160, 'size': 30, 'orient': 'r', 'arrow_default': True, 'arrow_orient': 'n'},
-            {'x0': 900, 'y0': 660, 'size': 30, 'orient': 'r', 'arrow_default': False, 'arrow_orient': 'n'},
+            #{'x0': 900, 'y0': 660, 'size': 30, 'orient': 'r', 'arrow_default': False, 'arrow_orient': 'n'},
         ]
         for i, solenoid in enumerate(self.solenoids):
             solenoid['switch_state'] = False
@@ -153,6 +213,7 @@ class CombustionChamberGUI:
             arrow_state = solenoid['switch_state'] if solenoid['arrow_default'] else not solenoid['switch_state']
             self.draw_arrow(x0, y0, size, orient, arrow_state, i, arrow_orient)
         # Initializes solenoids with their positions, sizes, orientations, and arrow states.Draws solenoids and their corresponding arrows to indicate flow direction.
+
 
     def draw_solenoid(self, x0, y0, size, orient):
         if orient == 'u':
@@ -254,11 +315,13 @@ class CombustionChamberGUI:
         ttk.Label(self.gas_frame, text="Setpoint").grid(row=row, column=2, padx=5, pady=5)
         ttk.Label(self.gas_frame, text="Unit").grid(row=row, column=3, padx=5, pady=5)
         row += 1
-        for label, data in settings.items():
+        for i in range(self.num_mfcs):
+            label = chr(ord('A') + i)
             ttk.Label(self.gas_frame, text=label).grid(row=row, column=0, padx=5, pady=5)
-            gas_var = tk.StringVar(value=data["gas"])
-            setpoint_var = tk.DoubleVar(value=data["setpoint"])
-            unit_var = tk.StringVar(value=data["unit"])
+            default_gas = self.selected_gasses[i] if self.selected_gasses and i < len(self.selected_gasses) else gas_options[0]
+            gas_var = tk.StringVar(value=default_gas)
+            setpoint_var = tk.DoubleVar(value=0.0)
+            unit_var = tk.StringVar(value="SLPM")
             gas_entry = ttk.Combobox(self.gas_frame, textvariable=gas_var, width=10, values=gas_options, state="readonly")
             gas_entry.grid(row=row, column=1, padx=5, pady=5)
             setpoint_entry = ttk.Entry(self.gas_frame, textvariable=setpoint_var, width=10)
@@ -275,6 +338,8 @@ class CombustionChamberGUI:
         reset_btn = ttk.Button(self.gas_frame, text="Reset Mass Flow", command=self.reset_mass_flow)
         reset_btn.grid(row=row+1, column=0, columnspan=4, pady=10)
     # Saves the gas settings from the input fields and prints them to the console.
+
+   
     def save_gas_settings(self):
         print("Saved!")
         for label in self.gas_vars.keys():
@@ -282,19 +347,31 @@ class CombustionChamberGUI:
             setpoint = self.setpoint_vars[label].get()
             unit = self.unit_vars[label].get()
             print(f"{label}: {{'gas': '{gas}', 'setpoint': {setpoint}, 'unit': '{unit}'}}")
+            async def set_flow_rate(label, setpoint):
+                async with FlowController(address = 'COM3', unit = label) as mfc:
+                    await mfc.set_flow_rate(setpoint)
+                    print(f'Set to {setpoint} SLPM for controller {unit}')
+                    await asyncio.sleep(1)
+            asyncio.run(set_flow_rate(label,setpoint))
+
         print("")
     # Resets the mass flow controllers to zero and prints the current settings.
     def reset_mass_flow(self):
         self.setpoint_vars['A'].set(0.0)
         self.setpoint_vars['B'].set(0.0)
         self.setpoint_vars['C'].set(0.0)
-        self.setpoint_vars['D'].set(0.0)
+        #self.setpoint_vars['D'].set(0.0)
         print("Mass flow controllers reset")
         for label in self.gas_vars.keys():
             gas = self.gas_vars[label].get()
             setpoint = self.setpoint_vars[label].get()
             unit = self.unit_vars[label].get()
             print(f"{label}: {{'gas': '{gas}', 'setpoint': {setpoint}, 'unit': '{unit}'}}")
+            async def zero():
+               async with FlowController(address = 'COM3', unit = label) as mfc:
+                   await mfc.set_flow_rate(0.0)
+                   print('Mass flow controllers have been reset to 0.0 SLPM')
+            asyncio.run(zero())
         print("")
     # Retrieves the states of the solenoids and prints them to the console.
     def get_solenoid_states(self):
@@ -302,8 +379,20 @@ class CombustionChamberGUI:
         print("Solenoid States:", states)
         return states
 
-
 if __name__ == "__main__":
     root = tk.Tk()
-    app = CombustionChamberGUI(root)
+    root.withdraw()  # Hide main window during setup dialog
+    dialog = MFCsetup(root)
+    num_mfcs = dialog.value if dialog.value else 3  # Default to 3 if dialog closed
+    gas_options = ['Air', 'Ar', 'CH4', 'CO', 'CO2', 'C2H6', 'H2', 'He',
+                   'N2', 'N2O', 'Ne', 'O2', 'C3H8', 'n-C4H10', 'C2H2',
+                   'C2H4', 'i-C2H10', 'Kr', 'Xe', 'SF6', 'C-25', 'C-10',
+                   'C-8', 'C-2', 'C-75', 'A-75', 'A-25', 'A1025', 'Star29',
+                   'P-5']
+    gas_dialog = ChooseGas(root, num_mfcs, gas_options)
+    selected_gasses = gas_dialog.selected_gasses
+    print("Selected Gasses:", selected_gasses)
+    root.deiconify()  # Show main window
+    app = CombustionChamberGUI(root, num_mfcs,selected_gasses)
     root.mainloop()
+

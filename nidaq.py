@@ -1,4 +1,5 @@
 import nidaqmx
+from nidaqmx.constants import LineGrouping
 
 class NI9474Controller:
     def __init__(self, device_name="Dev1", port="port0"):
